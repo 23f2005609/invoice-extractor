@@ -1,5 +1,5 @@
 import os
-import dateutil.parser # Ensure you run: pip install python-dateutil
+import dateutil.parser
 from dotenv import load_dotenv
 from google import genai
 from pydantic import BaseModel
@@ -15,33 +15,43 @@ class InvoiceData(BaseModel):
     tax: float | None = None
     currency: str | None = None
 
-def extract_invoice_info(text: str) -> InvoiceData:
-    # 1. Instruct the model to convert dates to ISO 8601 (YYYY-MM-DD)
+def extract_invoice_info(text: str) -> dict:
     prompt = f"""
-    Extract the following fields from the invoice text. 
-    Convert all dates into 'YYYY-MM-DD' format. 
-    If a field is missing, return null.
+    Extract the following fields from the invoice text.
+    Return ONLY valid JSON.
+    - invoice_no: string
+    - date: string in YYYY-MM-DD format
+    - vendor: string
+    - amount: number (subtotal)
+    - tax: number
+    - currency: string (e.g., INR, USD)
     
-    Invoice Text: {text}
+    If information is missing, use null.
+    
+    Invoice Text:
+    {text}
     """
     
     response = client.models.generate_content(
         model="gemini-1.5-flash",
         contents=prompt,
-        config={
-            "response_mime_type": "application/json",
-            "response_schema": InvoiceData,
-        },
+        config={"response_mime_type": "application/json"},
     )
     
-    # 2. Parse and validate
-    data = InvoiceData.model_validate_json(response.text)
-    
-    # 3. Fallback: If model failed to format the date correctly, parse it manually
-    if data.date:
-        try:
-            data.date = dateutil.parser.parse(data.date).strftime("%Y-%m-%d")
-        except:
-            pass # Keep original if parsing fails
-            
-    return data
+    # Use model_validate_json but catch errors to return a clean dictionary
+    try:
+        # Load the LLM response
+        data_obj = InvoiceData.model_validate_json(response.text)
+        data = data_obj.model_dump()
+        
+        # Final cleanup for the date
+        if data.get('date'):
+            try:
+                data['date'] = dateutil.parser.parse(data['date']).strftime("%Y-%m-%d")
+            except:
+                pass
+        return data
+    except Exception as e:
+        # If all else fails, return the raw parsed JSON to prevent a 500 error
+        import json
+        return json.loads(response.text)
