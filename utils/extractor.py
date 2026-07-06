@@ -3,55 +3,60 @@ import json
 import dateutil.parser
 from dotenv import load_dotenv
 from google import genai
-from pydantic import BaseModel
 
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
-# Define a strict model to force the LLM to think about these specific fields
-class InvoiceSchema(BaseModel):
-    invoice_no: str | None
-    date: str | None
-    vendor: str | None
-    amount: float | None
-    tax: float | None
-    currency: str | None
-
 def extract_invoice_info(text: str) -> dict:
+    # Use a prompt that explicitly handles the "null" requirement
     prompt = f"""
-    You are an expert invoice parser. Extract the following fields from the text.
-    If a field exists, extract it exactly. If it is absolutely not in the text, use null.
+    You are an invoice extraction API. Extract these fields from the text below.
+    If a field is not present, you MUST return null for that field.
     
-    Required fields:
-    - invoice_no: Look for "Invoice No:", "Invoice #:", or similar.
-    - date: Convert to YYYY-MM-DD.
-    - vendor: The company name.
-    - amount: The subtotal amount (number only).
-    - tax: The tax amount (number only).
-    - currency: The currency code (e.g., INR, USD).
+    Required JSON keys:
+    - "invoice_no": string or null
+    - "date": string "YYYY-MM-DD" or null
+    - "vendor": string or null
+    - "amount": number or null (Subtotal before tax)
+    - "tax": number or null (Tax amount only)
+    - "currency": string or null
     
-    Invoice Text:
-    {text}
+    Text: {text}
     """
     
-    response = client.models.generate_content(
-        model="gemini-1.5-flash",
-        contents=prompt,
-        config={"response_mime_type": "application/json"},
-    )
+    default_response = {
+        "invoice_no": None, "date": None, "vendor": None, 
+        "amount": None, "tax": None, "currency": None
+    }
     
     try:
+        response = client.models.generate_content(
+            model="gemini-1.5-flash",
+            contents=prompt,
+            config={"response_mime_type": "application/json"},
+        )
+        
         data = json.loads(response.text)
         
-        # Clean up date format if it exists
-        if data.get('date'):
-            try:
-                data['date'] = dateutil.parser.parse(str(data['date'])).strftime("%Y-%m-%d")
-            except:
-                pass
+        # Ensure every required key exists, even if the model missed it
+        final = {k: data.get(k) for k in default_response.keys()}
         
-        # Return the dictionary directly
-        return data
+        # Force Date format
+        if final['date']:
+            try:
+                final['date'] = dateutil.parser.parse(str(final['date'])).strftime("%Y-%m-%d")
+            except:
+                final['date'] = None
+        
+        # Force numeric types
+        for k in ['amount', 'tax']:
+            if final[k] is not None:
+                try:
+                    final[k] = float(final[k])
+                except:
+                    final[k] = None
+                    
+        return final
+        
     except:
-        # Fallback to empty structure
-        return {"invoice_no": None, "date": None, "vendor": None, "amount": None, "tax": None, "currency": None}
+        return default_response
