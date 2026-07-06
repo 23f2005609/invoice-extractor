@@ -8,13 +8,15 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def extract_invoice_info(text: str) -> dict:
+    # 1. Explicitly ask for nulls if not found
     prompt = f"""
     Extract the following fields from the invoice text.
     Return ONLY valid JSON.
-    Fields: invoice_no, date (YYYY-MM-DD), vendor, amount (number), tax (number), currency.
-    If a field is missing, use null.
+    Fields: invoice_no, date, vendor, amount, tax, currency.
+    If a field is NOT found, set its value to null.
     
-    Invoice Text: {text}
+    Invoice Text:
+    {text}
     """
     
     try:
@@ -24,26 +26,21 @@ def extract_invoice_info(text: str) -> dict:
             config={"response_mime_type": "application/json"},
         )
         
-        # Parse the JSON response
         data = json.loads(response.text)
         
-        # Clean the date
-        if data.get('date'):
+        # 2. Force the structure to ensure all 6 keys exist
+        keys = ["invoice_no", "date", "vendor", "amount", "tax", "currency"]
+        final_output = {key: data.get(key) for key in keys}
+        
+        # 3. Clean the date if it exists
+        if final_output['date']:
             try:
-                data['date'] = dateutil.parser.parse(str(data['date'])).strftime("%Y-%m-%d")
+                final_output['date'] = dateutil.parser.parse(str(final_output['date'])).strftime("%Y-%m-%d")
             except:
                 pass
         
-        # Ensure numbers are floats
-        for field in ['amount', 'tax']:
-            if data.get(field) is not None:
-                data[field] = float(data[field])
-        
-        return data
+        return final_output
         
     except Exception as e:
-        # Return a default object if LLM fails, instead of crashing
-        return {
-            "invoice_no": None, "date": None, "vendor": None, 
-            "amount": None, "tax": None, "currency": None
-        }
+        # Return all keys as null instead of crashing
+        return {key: None for key in ["invoice_no", "date", "vendor", "amount", "tax", "currency"]}
