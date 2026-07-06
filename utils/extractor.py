@@ -8,23 +8,25 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def extract_invoice_info(text: str) -> dict:
-    # Use a prompt that explicitly handles the "null" requirement
+    # 1. Ask the model for a strict JSON format
     prompt = f"""
     You are an invoice extraction API. Extract these fields from the text below.
-    If a field is not present, you MUST return null for that field.
+    If a field is not found, you MUST return null.
     
-    Required JSON keys:
-    - "invoice_no": string or null
-    - "date": string "YYYY-MM-DD" or null
-    - "vendor": string or null
-    - "amount": number or null (Subtotal before tax)
-    - "tax": number or null (Tax amount only)
-    - "currency": string or null
+    Fields:
+    - invoice_no: string or null
+    - date: string "YYYY-MM-DD" or null
+    - vendor: string or null
+    - amount: number or null (Subtotal before tax)
+    - tax: number or null (Tax amount only)
+    - currency: string or null
     
-    Text: {text}
+    Invoice Text:
+    {text}
     """
     
-    default_response = {
+    # Define the default structure
+    empty_result = {
         "invoice_no": None, "date": None, "vendor": None, 
         "amount": None, "tax": None, "currency": None
     }
@@ -36,27 +38,28 @@ def extract_invoice_info(text: str) -> dict:
             config={"response_mime_type": "application/json"},
         )
         
+        # Parse JSON
         data = json.loads(response.text)
         
-        # Ensure every required key exists, even if the model missed it
-        final = {k: data.get(k) for k in default_response.keys()}
+        # Build the final dictionary manually to guarantee all 6 keys exist
+        final_output = {
+            "invoice_no": data.get("invoice_no"),
+            "date": data.get("date"),
+            "vendor": data.get("vendor"),
+            "amount": float(data["amount"]) if data.get("amount") is not None else None,
+            "tax": float(data["tax"]) if data.get("tax") is not None else None,
+            "currency": data.get("currency")
+        }
         
-        # Force Date format
-        if final['date']:
+        # Clean the date
+        if final_output["date"]:
             try:
-                final['date'] = dateutil.parser.parse(str(final['date'])).strftime("%Y-%m-%d")
+                final_output["date"] = dateutil.parser.parse(str(final_output["date"])).strftime("%Y-%m-%d")
             except:
-                final['date'] = None
-        
-        # Force numeric types
-        for k in ['amount', 'tax']:
-            if final[k] is not None:
-                try:
-                    final[k] = float(final[k])
-                except:
-                    final[k] = None
+                final_output["date"] = None
                     
-        return final
+        return final_output
         
-    except:
-        return default_response
+    except Exception:
+        # CRITICAL: Return the default structure instead of crashing with a 500
+        return empty_result
