@@ -24,13 +24,13 @@ class InvoiceData(BaseModel):
     currency: str | None = None
 
 def extract_invoice_info(text: str) -> InvoiceData:
-    # 4. Use a valid model version (e.g., gemini-1.5-flash)
     response = client.models.generate_content(
         model="gemini-3.5-flash",
-        contents=f"Extract these fields from the invoice text: {text}",
+        contents=f"Extract the following invoice details. IMPORTANT: You must convert all dates to 'YYYY-MM-DD' format. Input text: {text}",
         config={
             "response_mime_type": "application/json",
             "response_schema": InvoiceData,
         },
     )
+    # The SDK will now force the model to adhere to the schema
     return InvoiceData.model_validate_json(response.text)
