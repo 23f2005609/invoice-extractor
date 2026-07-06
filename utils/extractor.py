@@ -1,5 +1,6 @@
 import os
 import json
+import re
 import dateutil.parser
 from dotenv import load_dotenv
 from google import genai
@@ -8,13 +9,13 @@ load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 def extract_invoice_info(text: str) -> dict:
-    # 1. Ask the model for a strict JSON format
+    # 1. Improved prompt telling the LLM to look for generic IDs
     prompt = f"""
     You are an invoice extraction API. Extract these fields from the text below.
     If a field is not found, you MUST return null.
     
     Fields:
-    - invoice_no: string or null
+    - invoice_no: Look for any document ID, receipt number, or alphanumeric code (e.g., "YZ-9900", "INV-123").
     - date: string "YYYY-MM-DD" or null
     - vendor: string or null
     - amount: number or null (Subtotal before tax)
@@ -25,7 +26,6 @@ def extract_invoice_info(text: str) -> dict:
     {text}
     """
     
-    # Define the default structure
     empty_result = {
         "invoice_no": None, "date": None, "vendor": None, 
         "amount": None, "tax": None, "currency": None
@@ -38,10 +38,8 @@ def extract_invoice_info(text: str) -> dict:
             config={"response_mime_type": "application/json"},
         )
         
-        # Parse JSON
         data = json.loads(response.text)
         
-        # Build the final dictionary manually to guarantee all 6 keys exist
         final_output = {
             "invoice_no": data.get("invoice_no"),
             "date": data.get("date"),
@@ -50,6 +48,13 @@ def extract_invoice_info(text: str) -> dict:
             "tax": float(data["tax"]) if data.get("tax") is not None else None,
             "currency": data.get("currency")
         }
+        
+        # 2. THE FIX: Regex Fallback for the Invoice Number
+        if not final_output["invoice_no"]:
+            # This looks for patterns exactly like "YZ-9900" (2-4 letters, a dash, 3-6 numbers)
+            match = re.search(r'([A-Z]{2,4}-\d{3,6})', text)
+            if match:
+                final_output["invoice_no"] = match.group(1)
         
         # Clean the date
         if final_output["date"]:
@@ -61,5 +66,4 @@ def extract_invoice_info(text: str) -> dict:
         return final_output
         
     except Exception:
-        # CRITICAL: Return the default structure instead of crashing with a 500
         return empty_result
