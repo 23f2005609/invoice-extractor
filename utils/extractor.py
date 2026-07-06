@@ -3,44 +3,55 @@ import json
 import dateutil.parser
 from dotenv import load_dotenv
 from google import genai
+from pydantic import BaseModel
 
 load_dotenv()
 client = genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
+# Define a strict model to force the LLM to think about these specific fields
+class InvoiceSchema(BaseModel):
+    invoice_no: str | None
+    date: str | None
+    vendor: str | None
+    amount: float | None
+    tax: float | None
+    currency: str | None
+
 def extract_invoice_info(text: str) -> dict:
-    # 1. Explicitly ask for nulls if not found
     prompt = f"""
-    Extract the following fields from the invoice text.
-    Return ONLY valid JSON.
-    Fields: invoice_no, date, vendor, amount, tax, currency.
-    If a field is NOT found, set its value to null.
+    You are an expert invoice parser. Extract the following fields from the text.
+    If a field exists, extract it exactly. If it is absolutely not in the text, use null.
+    
+    Required fields:
+    - invoice_no: Look for "Invoice No:", "Invoice #:", or similar.
+    - date: Convert to YYYY-MM-DD.
+    - vendor: The company name.
+    - amount: The subtotal amount (number only).
+    - tax: The tax amount (number only).
+    - currency: The currency code (e.g., INR, USD).
     
     Invoice Text:
     {text}
     """
     
+    response = client.models.generate_content(
+        model="gemini-1.5-flash",
+        contents=prompt,
+        config={"response_mime_type": "application/json"},
+    )
+    
     try:
-        response = client.models.generate_content(
-            model="gemini-1.5-flash",
-            contents=prompt,
-            config={"response_mime_type": "application/json"},
-        )
-        
         data = json.loads(response.text)
         
-        # 2. Force the structure to ensure all 6 keys exist
-        keys = ["invoice_no", "date", "vendor", "amount", "tax", "currency"]
-        final_output = {key: data.get(key) for key in keys}
-        
-        # 3. Clean the date if it exists
-        if final_output['date']:
+        # Clean up date format if it exists
+        if data.get('date'):
             try:
-                final_output['date'] = dateutil.parser.parse(str(final_output['date'])).strftime("%Y-%m-%d")
+                data['date'] = dateutil.parser.parse(str(data['date'])).strftime("%Y-%m-%d")
             except:
                 pass
         
-        return final_output
-        
-    except Exception as e:
-        # Return all keys as null instead of crashing
-        return {key: None for key in ["invoice_no", "date", "vendor", "amount", "tax", "currency"]}
+        # Return the dictionary directly
+        return data
+    except:
+        # Fallback to empty structure
+        return {"invoice_no": None, "date": None, "vendor": None, "amount": None, "tax": None, "currency": None}
